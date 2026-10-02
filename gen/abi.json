@@ -1,0 +1,532 @@
+{
+  "abiVersion": 1,
+  "pointerSize": 4,
+  "macros": {
+    "SW_ABI_VERSION": 1,
+    "SW_NULL_HANDLE": 0,
+    "SW_TELEMETRY_SIZE": 48,
+    "SW_MAX_CORES": 4,
+    "SW_ARENA_DEFAULT_BYTES": 268435456,
+    "SW_ARENA_MAX_BYTES": 3221225472,
+    "SW_ARENA_F_READ": 1,
+    "SW_ARENA_F_WRITE": 2,
+    "SW_ARENA_F_SHARED": 4,
+    "SW_FEATURE_SIMD128": 1,
+    "SW_FEATURE_BULK_MEMORY": 2,
+    "SW_FEATURE_TAIL_CALL": 4,
+    "SW_FEATURE_SHARED_MEMORY": 8,
+    "SW_FEATURE_SIGN_EXT": 16
+  },
+  "status": [
+    {
+      "name": "SW_OK",
+      "value": 0
+    },
+    {
+      "name": "SW_ERR_INVALID_ARG",
+      "value": 1
+    },
+    {
+      "name": "SW_ERR_NOT_INITIALIZED",
+      "value": 2
+    },
+    {
+      "name": "SW_ERR_OUT_OF_MEMORY",
+      "value": 3
+    },
+    {
+      "name": "SW_ERR_UNSUPPORTED",
+      "value": 4
+    }
+  ],
+  "features": [
+    {
+      "name": "SW_FEATURE_SIMD128",
+      "value": 1
+    },
+    {
+      "name": "SW_FEATURE_BULK_MEMORY",
+      "value": 2
+    },
+    {
+      "name": "SW_FEATURE_TAIL_CALL",
+      "value": 4
+    },
+    {
+      "name": "SW_FEATURE_SHARED_MEMORY",
+      "value": 8
+    },
+    {
+      "name": "SW_FEATURE_SIGN_EXT",
+      "value": 16
+    }
+  ],
+  "regions": [
+    {
+      "name": "SW_REGION_RESERVED",
+      "value": 0
+    },
+    {
+      "name": "SW_REGION_GUEST_RAM",
+      "value": 1
+    },
+    {
+      "name": "SW_REGION_TLB_MMIO",
+      "value": 2
+    },
+    {
+      "name": "SW_REGION_CPU_CONTEXTS",
+      "value": 3
+    },
+    {
+      "name": "SW_REGION_NVN_RING",
+      "value": 4
+    },
+    {
+      "name": "SW_REGION_AUDIO_RING",
+      "value": 5
+    },
+    {
+      "name": "SW_REGION_HID_STATE",
+      "value": 6
+    },
+    {
+      "name": "SW_REGION_IO_RING",
+      "value": 7
+    },
+    {
+      "name": "SW_REGION_TELEMETRY",
+      "value": 8
+    },
+    {
+      "name": "SW_REGION_COUNT",
+      "value": 9
+    }
+  ],
+  "arenaFlags": [
+    {
+      "name": "SW_ARENA_F_READ",
+      "value": 1
+    },
+    {
+      "name": "SW_ARENA_F_WRITE",
+      "value": 2
+    },
+    {
+      "name": "SW_ARENA_F_SHARED",
+      "value": 4
+    }
+  ],
+  "structs": [
+    {
+      "name": "SwCoreTelemetry",
+      "size": 48,
+      "align": 8,
+      "tailPad": 0,
+      "fields": [
+        {
+          "name": "abi_version",
+          "offset": 0,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "init_state",
+          "offset": 4,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "boot_ticks_ns",
+          "offset": 8,
+          "size": 8,
+          "count": 1,
+          "align": 8,
+          "padBefore": 0,
+          "ctype": "uint64_t"
+        },
+        {
+          "name": "arena_bytes",
+          "offset": 16,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "ring_capacity",
+          "offset": 20,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "last_roundtrip_ns",
+          "offset": 24,
+          "size": 8,
+          "count": 1,
+          "align": 8,
+          "padBefore": 0,
+          "ctype": "uint64_t"
+        },
+        {
+          "name": "reserved",
+          "offset": 32,
+          "size": 8,
+          "count": 2,
+          "align": 8,
+          "padBefore": 0,
+          "ctype": "uint64_t"
+        }
+      ]
+    },
+    {
+      "name": "SwGuestContext",
+      "size": 832,
+      "align": 8,
+      "tailPad": 0,
+      "fields": [
+        {
+          "name": "x",
+          "offset": 0,
+          "size": 8,
+          "count": 31,
+          "align": 8,
+          "padBefore": 0,
+          "ctype": "uint64_t"
+        },
+        {
+          "name": "sp",
+          "offset": 248,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "pc",
+          "offset": 252,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "pstate",
+          "offset": 256,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "cpsr_flags",
+          "offset": 260,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "tpidr_el0",
+          "offset": 264,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "tpidrro_el0",
+          "offset": 268,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "fpcr",
+          "offset": 272,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "fpsr",
+          "offset": 276,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "pad_to_64",
+          "offset": 280,
+          "size": 1,
+          "count": 40,
+          "align": 1,
+          "padBefore": 0,
+          "ctype": "uint8_t"
+        },
+        {
+          "name": "v",
+          "offset": 320,
+          "size": 1,
+          "count": 512,
+          "align": 1,
+          "padBefore": 0,
+          "ctype": "uint8_t"
+        }
+      ]
+    },
+    {
+      "name": "SwArenaRange",
+      "size": 16,
+      "align": 4,
+      "tailPad": 0,
+      "fields": [
+        {
+          "name": "offset",
+          "offset": 0,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "size",
+          "offset": 4,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "region",
+          "offset": 8,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "flags",
+          "offset": 12,
+          "size": 4,
+          "count": 1,
+          "align": 4,
+          "padBefore": 0,
+          "ctype": "uint32_t"
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "sw_arena_init",
+      "ret": "void",
+      "params": [
+        {
+          "name": "arena_bytes",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_arena_shutdown",
+      "ret": "void",
+      "params": []
+    },
+    {
+      "name": "sw_arena_reserve",
+      "ret": "uint32_t",
+      "params": [
+        {
+          "name": "region",
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "size",
+          "ctype": "uint32_t"
+        },
+        {
+          "name": "align",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_arena_range",
+      "ret": "SwArenaRange",
+      "params": [
+        {
+          "name": "region",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_arena_ptr",
+      "ret": "void*",
+      "params": [
+        {
+          "name": "offset",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_arena_size",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_arena_used",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_arena_grow",
+      "ret": "uint32_t",
+      "params": [
+        {
+          "name": "delta_bytes",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_arena_write_region_table",
+      "ret": "uint32_t",
+      "params": [
+        {
+          "name": "out",
+          "ctype": "void*"
+        },
+        {
+          "name": "out_capacity",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_abi_version",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_features",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_build_id",
+      "ret": "char*",
+      "params": []
+    },
+    {
+      "name": "sw_core_init",
+      "ret": "int32_t",
+      "params": [
+        {
+          "name": "arena_bytes",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_core_shutdown",
+      "ret": "void",
+      "params": []
+    },
+    {
+      "name": "sw_core_state",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_arena_ptr",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_arena_size",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_arena_used",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_region_table",
+      "ret": "uint32_t",
+      "params": [
+        {
+          "name": "out",
+          "ctype": "void*"
+        },
+        {
+          "name": "out_capacity",
+          "ctype": "uint32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_core_telemetry_offset",
+      "ret": "uint32_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_telemetry_refresh",
+      "ret": "void",
+      "params": []
+    },
+    {
+      "name": "sw_core_ping",
+      "ret": "int32_t",
+      "params": [
+        {
+          "name": "value",
+          "ctype": "int32_t"
+        }
+      ]
+    },
+    {
+      "name": "sw_core_monotonic_ns",
+      "ret": "uint64_t",
+      "params": []
+    },
+    {
+      "name": "sw_core_note_roundtrip",
+      "ret": "void",
+      "params": [
+        {
+          "name": "elapsed_ns",
+          "ctype": "uint64_t"
+        }
+      ]
+    }
+  ]
+}

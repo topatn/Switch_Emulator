@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "types": ["vite/client", "node"],
+
+    // `?worker&url` suffix imports resolve to a string at build time and have no
+    // type on disk, so they need a declaration.
+    // (see src/types/ambient.d.ts)
+
+    "paths": {
+      "@core/*": ["../core/*"],
+      "@gen/*": ["../gen/*"]
+    }
+  },
+  "include": ["src", "../gen", "vite.config.ts"]
+}

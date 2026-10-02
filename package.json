@@ -1,0 +1,29 @@
+{
+  "name": "switch-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-native Nintendo Switch emulator (Pokemon-focused). Architecture in ARCHITECTURE.md.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "gen:abi": "node tools/gen-abi.mjs",
+    "build:stub-core": "node tools/build-stub-core.mjs",
+    "scan": "node tools/scan-artifacts.mjs",
+    "dev": "npm run build:stub-core && vite --config web/vite.config.ts",
+    "build": "npm run build:stub-core && vite build --config web/vite.config.ts",
+    "preview": "node tools/serve/serve.mjs",
+    "typecheck": "tsc -p web/tsconfig.json --noEmit",
+    "test": "npm run typecheck && npm run scan",
+    "verify": "node tools/verify-phase0.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
