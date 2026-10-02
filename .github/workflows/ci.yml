@@ -1,0 +1,274 @@
+name: CI
+
+# Every job here maps to a gate from ARCHITECTURE.md Part 6. The Phase 0 gates are
+# the cross-cutting ones:
+#
+#   - host tests green
+#   - artifact scan green  (Part 0 compliance checklist item 2)
+#   - generated ABI mirrors are not stale
+#   - the web build succeeds, which includes the CSP/remote-URL check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref. Costs nothing on a project this size and
+# saves a lot of waiting.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin to a version range so a toolchain surprise does not break CI, but a
+  # deliberate upgrade is visible in the diff.
+  NODE_VERSION: '22'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Host-native core tests + the generated-ABI check.
+  #
+  # "Same source, two builds is the cheapest correctness net" (Part 4.1): the
+  # arena allocator and the ABI surface are tested natively, where the feedback
+  # loop is milliseconds rather than a browser rebuild.
+  # ---------------------------------------------------------------------------
+  native-tests:
+    name: host tests (core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      - name: Configure
+        run: cmake -S core -B core/build-host -DSW_BUILD_TESTS=ON -G Ninja
+
+      - name: Build
+        run: cmake --build core/build-host
+
+      - name: Run tests
+        run: ctest --test-dir core/build-host --output-on-failure
+
+      - name: Configure and build the WASM core
+        # Proves the Emscripten path still compiles. Without this, a broken
+        # emsdk flag would only be discovered by whoever has a toolchain.
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: '3.1.74'
+
+      - name: emconfigure
+        run: |
+          emcmake cmake -S core -B core/build -DSW_BUILD_WASM=ON -G Ninja
+          cmake --build core/build
+
+      - name: The WASM core must exist and be non-trivial
+        run: |
+          test -f core/build/core.wasm || {
+            echo "::error::the Emscripten build produced no core.wasm"
+            exit 1
+          }
+          SIZE=$(stat -c%s core/build/core.wasm)
+          echo "core.wasm: $SIZE bytes"
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "::error::core.wasm is only $SIZE bytes, which suggests the build produced almost nothing"
+            exit 1
+          fi
+
+      - name: Upload the core as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: switch-core-wasm
+          path: core/build/core.wasm
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # ABI mirrors must match the C headers.
+  #
+  # gen/ is checked in (Part 5) so a struct change is reviewable in the diff. That
+  # only works if CI fails when someone edits a header and forgets to regenerate.
+  # ---------------------------------------------------------------------------
+  abi-mirrors:
+    name: generated ABI is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check gen/ is not stale
+        run: node tools/gen-abi.mjs --check
+
+  # ---------------------------------------------------------------------------
+  # Part 0: the artifact scan.
+  #
+  # Runs over both the source tree and the build output, because "the repository is
+  # clean" and "the shipped bundle is clean" are different claims and either can
+  # be true while the other is false.
+  # ---------------------------------------------------------------------------
+  artifact-scan:
+    name: artifact scan (Part 0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the stub core
+        # The real core.wasm is the Emscripten artifact, uploaded by native-tests.
+        # This job scans the source tree and a build made with the stub, which is
+        # enough: the stub is also a .wasm binary and the scan does not care which.
+        run: npm run build:stub-core
+
+      - name: Build the web app
+        run: npm run build
+
+      - name: Scan the source tree
+        run: node tools/scan-artifacts.mjs
+
+      - name: Scan the build output
+        run: node tools/scan-artifacts.mjs --artifact web/dist
+
+      - name: Also verify against the real core if it was built
+        uses: actions/download-artifact@v4
+        with:
+          name: switch-core-wasm
+          path: core/build
+        continue-on-error: true
+
+      - name: Scan the Emscripten core
+        if: hashFiles('core/build/core.wasm') != ''
+        run: node tools/scan-artifacts.mjs --artifact core/build
+
+  # ---------------------------------------------------------------------------
+  # Typecheck + build. The Vite build includes the remote-URL check, which is a
+  # Part 0 enforcement ("no runtime network calls").
+  # ---------------------------------------------------------------------------
+  web:
+    name: typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the stub core
+        run: npm run build:stub-core
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the shell serves with the isolation headers
+        # Boots tools/serve/serve.mjs and asserts the two headers that make the
+        # whole thing possible. This is Part 7 risk 7's mitigation, and it is
+        # cheap to check.
+        run: |
+          node tools/serve/serve.mjs --port 8099 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sSf -o /dev/null "http://127.0.0.1:8099/" && break
+            sleep 0.2
+          done
+          echo "--- headers ---"
+          curl -sSI "http://127.0.0.1:8099/" | tee /dev/stderr | {
+            grep -qi 'cross-origin-opener-policy:\s*same-origin' \
+              || { echo "::error::COOP header missing or wrong"; exit 1; }
+            grep -qi 'cross-origin-embedder-policy:\s*require-corp' \
+              || { echo "::error::COEP header missing or wrong"; exit 1; }
+            grep -qi "content-security-policy:.*default-src 'self'" \
+              || { echo "::error::CSP default-src self missing"; exit 1; }
+          }
+          echo "isolation headers OK"
+          kill $SERVER_PID
+
+      - name: Verify core.wasm is served with the right MIME type
+        # A wasm file served as octet-stream fails instantiateStreaming. The app
+        # falls back to arrayBuffer, but serving it correctly is better and this
+        # catches a server misconfiguration early.
+        run: |
+          node tools/serve/serve.mjs --port 8098 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sSf -o /dev/null "http://127.0.0.1:8098/core.wasm" && break
+            sleep 0.2
+          done
+          TYPE=$(curl -sSI "http://127.0.0.1:8098/core.wasm" | grep -i '^content-type:')
+          echo "$TYPE"
+          echo "$TYPE" | grep -qi 'application/wasm' \
+            || { echo "::error::core.wasm served with the wrong Content-Type"; exit 1; }
+          kill $SERVER_PID
+
+      - name: Upload the built app
+        uses: actions/upload-artifact@v4
+        with:
+          name: switch-web-dist
+          path: web/dist
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Browser-side verification of the Phase 0 gates.
+  #
+  # The shell's own gate table is authoritative and is rendered in the UI; this
+  # job asserts the same facts headlessly so a regression fails CI rather than
+  # waiting for a human to open the page.
+  #
+  # It runs the three gates that are automatable:
+  #   crossOriginIsolated === true
+  #   all four workers boot
+  #   round-trip p95 < 1 ms
+  #
+  # The folder-picker and keys-picker gates are deliberately NOT checked here:
+  # both require a user gesture, and automating a native file dialog is not
+  # possible. Their "CI only" status in the UI is honest about that.
+  # ---------------------------------------------------------------------------
+  browser-gates:
+    name: phase 0 gates (headless Chromium)
+    runs-on: ubuntu-latest
+    needs: [web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: npm ci
+
+      - name: Download the built app
+        uses: actions/download-artifact@v4
+        with:
+          name: switch-web-dist
+          path: web/dist
+
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Serve and verify the gates
+        run: node tools/verify-phase0.mjs
+
+      - name: Upload diagnostics
+        # The page's own "copy diagnostics" output, which is what a user would send
+        # in a bug report. Failing the run here would duplicate the previous step's
+        # failure; the artifact is for inspection.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0-diagnostics
+          path: .phase0/diagnostics.txt
+          retention-days: 7
+          if-no-files-found: ignore

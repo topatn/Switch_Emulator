@@ -60,7 +60,7 @@ self.addEventListener('message', async (event) => {
   if (msg?.type !== 'boot') return;
 
   try {
-    await bootWorker(WorkerKind.Audio, msg);
+    await bootWorker(ctx, msg);
   } catch (error) {
     reportError(WorkerKind.Audio, error);
     return;

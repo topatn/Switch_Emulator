@@ -289,7 +289,40 @@ export function App({ store }: { store: Store }) {
             onPickKeys={() => void pickKeys()}
             onFinish={() => store.set({ phase: 'ready' })}
           />
+
+          {/*
+            Diagnostics stays reachable during onboarding. That is not a
+            convenience: a user blocked on the folder picker has no other way to
+            find out whether the four workers actually booted, and the Phase 0 gate
+            table is exactly the answer. Gating diagnostics behind finishing setup
+            would hide the diagnostics from the people who most need them.
+          */}
+          {tab === 'diagnostics' && (
+            <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 24 }}>
+              <DiagnosticsScreen
+                capabilities={capabilities}
+                boots={state.observation.boots}
+                adapter={state.observation.adapter}
+                logs={state.observation.logs}
+                gates={state.observation.gates}
+                roundTrip={state.observation.roundTrip}
+                onRemeasure={remeasure}
+              />
+            </div>
+          )}
         </main>
+        <footer className="app-footer">
+          <div className="row">
+            <span>
+              Bring your own legally-dumped game and keys. Nothing is uploaded, and no game content is
+              fetched.
+            </span>
+            <span className="app-header-spacer" />
+            <button className="btn btn-sm" onClick={() => setTab('diagnostics')}>
+              Diagnostics
+            </button>
+          </div>
+        </footer>
       </div>
     );
   }

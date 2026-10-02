@@ -68,6 +68,8 @@ export const WORKER_LABEL: Record<WorkerKind, string> = {
 
 export interface BootRequest {
   type: 'boot';
+  /** Correlated with BootOk.seq so the host's pending request can resolve. */
+  seq: number;
   kind: WorkerKind;
   arenaBytes: number;
   /** Directory holding core.wasm / core.js, as an absolute URL. */
@@ -175,6 +177,15 @@ export type WorkerRequest =
 
 export interface BootOk {
   type: 'booted';
+  /**
+   * Echoed from the boot request.
+   *
+   * Not optional: `booted` is the reply to a `request()`, so it has to carry the
+   * `seq` the host is waiting on. Without it the host's pending entry never
+   * resolves and the shell sits on "Booting…" with no error, because a timeout
+   * that has not yet fired looks exactly like a slow boot.
+   */
+  seq: number;
   kind: WorkerKind;
   abiVersion: number;
   buildId: string;

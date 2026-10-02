@@ -19,6 +19,10 @@ import type { GpuAdapterReply, RequestGpuAdapter } from '../platform/protocol';
 
 const ctx: WorkerContext = { kind: WorkerKind.Gpu };
 
+function post(msg: unknown): void {
+  (self as unknown as Worker).postMessage(msg);
+}
+
 /**
  * Requests the WebGPU adapter and normalises the result.
  *
@@ -75,22 +79,34 @@ async function describeAdapter(seq: number): Promise<GpuAdapterReply> {
   }
 }
 
+/**
+ * The adapter request handler, exported so boot can invoke it directly.
+ *
+ * A worker's `postMessage` delivers to the *parent*, not to itself, so a worker
+ * cannot use the message channel to trigger its own handler. Routing the boot-time
+ * probe through `postMessage` would send a `request-adapter` message to the shell,
+ * which has no handler for it and would log it as protocol drift.
+ */
+async function requestAdapter(msg: RequestGpuAdapter): Promise<void> {
+  const reply = await describeAdapter(msg.seq);
+  post(reply);
+
+  if (reply.available) {
+    const weakest = reply.isFallback ? ' (FALLBACK adapter - expect very low performance)' : '';
+    log(
+      WorkerKind.Gpu,
+      reply.isFallback ? 'warn' : 'info',
+      `WebGPU adapter ready: ${reply.vendor ?? 'unknown'} ${reply.architecture ?? ''}`.trim() +
+        `${weakest}. maxBufferSize=${reply.maxBufferSize ?? 'n/a'}.`,
+    );
+  } else {
+    log(WorkerKind.Gpu, 'error', `WebGPU unavailable: ${reply.reason}`);
+  }
+}
+
 installCommonHandlers(ctx, {
   'request-adapter': async (msg: RequestGpuAdapter) => {
-    const reply = await describeAdapter(msg.seq);
-    (self as unknown as Worker).postMessage(reply);
-
-    if (reply.available) {
-      const weakest = reply.isFallback ? ' (FALLBACK adapter - expect very low performance)' : '';
-      log(
-        WorkerKind.Gpu,
-        reply.isFallback ? 'warn' : 'info',
-        `WebGPU adapter ready: ${reply.vendor ?? 'unknown'} ${reply.architecture ?? ''}`.trim() +
-          `${weakest}. maxBufferSize=${reply.maxBufferSize ?? 'n/a'}.`,
-      );
-    } else {
-      log(WorkerKind.Gpu, 'error', `WebGPU unavailable: ${reply.reason}`);
-    }
+    await requestAdapter(msg);
   },
 });
 
@@ -99,15 +115,16 @@ self.addEventListener('message', async (event) => {
   if (msg?.type !== 'boot') return;
 
   try {
-    await bootWorker(WorkerKind.Gpu, msg);
+    await bootWorker(ctx, msg);
   } catch (error) {
     reportError(WorkerKind.Gpu, error);
     return;
   }
 
-  // Probe the adapter during boot so the Library screen can show a real
-  // capability verdict without the user asking for it.
-  (self as unknown as Worker).postMessage({ type: 'request-adapter', seq: 0 } satisfies RequestGpuAdapter);
+  // Probe the adapter during boot so the Library screen can show a real capability
+  // verdict without the user asking for it. Called directly rather than
+  // round-tripped through postMessage; see requestAdapter.
+  await requestAdapter({ type: 'request-adapter', seq: 0 });
 
   // Not yet implemented (Phase 2 for the NVN command processor and a minimal
   // clear-to-colour backend; Phase 3 for Maxwell -> WGSL translation).

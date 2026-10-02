@@ -61,9 +61,17 @@ function summariseRegions(regions: RegionInfo[]): RegionInfo[] {
 /**
  * Boots a worker: instantiate the core, initialise its arena, read back the
  * region table, and report success.
+ *
+ * `ctx` is the caller's own WorkerContext, not a fresh one, and that matters.
+ * Every worker's module-level `ctx` is the object its later code reads
+ * (`ctx.info?.exports...`) and the object its request handler closes over. If this
+ * function created its own context and returned it, the caller's `ctx.info` would
+ * stay undefined and the first post-boot call would throw
+ * `Cannot read properties of undefined (reading 'exports')` — a failure that only
+ * appears after a boot that reported success.
  */
-export async function bootWorker(kind: WorkerKind, msg: Extract<WorkerRequest, { type: 'boot' }>): Promise<WorkerContext> {
-  const ctx: WorkerContext = { kind };
+export async function bootWorker(ctx: WorkerContext, msg: Extract<WorkerRequest, { type: 'boot' }>): Promise<WorkerContext> {
+  const kind = ctx.kind;
 
   if (msg.control) {
     ctx.control = new ControlBlock(msg.control);
@@ -80,6 +88,7 @@ export async function bootWorker(kind: WorkerKind, msg: Extract<WorkerRequest, {
 
   const ok: BootOk = {
     type: 'booted',
+    seq: msg.seq,
     kind,
     abiVersion: info.abiVersion,
     buildId: info.buildId,
@@ -101,10 +110,12 @@ export async function bootWorker(kind: WorkerKind, msg: Extract<WorkerRequest, {
  * explicit "unsupported" error rather than being ignored, because a silently
  * dropped request is how a worker and the shell drift apart.
  */
-export function installCommonHandlers(
-  ctx: WorkerContext,
-  handlers: Partial<Record<WorkerRequest['type'], (msg: never) => Promise<void> | void>> = {},
-): void {
+/** Handler map a worker passes to `installCommonHandlers`. */
+export type WorkerHandlers = Partial<
+  Record<WorkerRequest['type'], (msg: never) => Promise<void> | void>
+>;
+
+export function installCommonHandlers(ctx: WorkerContext, handlers: WorkerHandlers = {}): void {
   const handle = async (msg: WorkerRequest) => {
     switch (msg.type) {
       case 'ping': {

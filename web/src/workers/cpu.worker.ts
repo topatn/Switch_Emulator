@@ -22,13 +22,18 @@ self.addEventListener('message', async (event) => {
   if (msg?.type !== 'boot') return;
 
   try {
-    await bootWorker(WorkerKind.Cpu, msg);
+    // The caller's own ctx is passed in, so `ctx.info` below is populated.
+    await bootWorker(ctx, msg);
   } catch (error) {
     reportError(WorkerKind.Cpu, error);
     return;
   }
 
-  const info = ctx.info!;
+  const info = ctx.info;
+  if (!info) {
+    reportError(WorkerKind.Cpu, new Error('Boot reported success but no core was attached.'));
+    return;
+  }
 
   // The Phase 0 gate's latency budget: "one round trip main->worker->main < 1 ms
   // (validates SAB/Atomics path)". This worker is the one that matters because it

@@ -66,7 +66,17 @@ export interface WorkerBootInfo {
   error?: { message: string; remedy?: string };
 }
 
-/** Per-worker arena sizes, from Part 3.9's shared-memory region list. */
+/**
+ * Per-worker arena sizes, from Part 3.9's shared-memory region list.
+ *
+ * The audio worker's figure is the one deviation, and it is deliberate: the
+ * audren PCM ring it owns is 4 MiB, not 128 MiB. Part 3.9's numbers are sized for
+ * the whole platform, and a Phase 0 core reserves the full Part 3.9 region set
+ * regardless of which worker asked for it — so 128 MiB would reserve 84 MiB of
+ * region space for a worker whose largest region is 4 MiB. When the region sizes
+ * become per-worker (Phase 2, once the CPU worker actually backs guest RAM with
+ * real pages), these should diverge properly rather than all being equal.
+ */
 const ARENA_BYTES: Record<WorkerKind, number> = {
   [WorkerKind.Cpu]: 1024 * 1024 * 1024, // owns guest RAM + TLB + CPU contexts
   [WorkerKind.Gpu]: 512 * 1024 * 1024, // render targets + NVN ring
@@ -75,7 +85,38 @@ const ARENA_BYTES: Record<WorkerKind, number> = {
   [WorkerKind.AudioWorklet]: 0,
 };
 
+/**
+ * Clamps a requested arena before it goes on the wire.
+ *
+ * The ceiling matches `SW_ARENA_MAX_BYTES` in core/include/core/memory.h, which
+ * sits below the wasm32 4 GiB limit so there is room for JIT code, audio rings,
+ * and the host's own allocations. The core clamps independently, but clamping
+ * here means the boot request and the `booted` report agree, so a mismatched
+ * arena shows up as a clear log line rather than a silent difference.
+ */
+const ARENA_CEILING_BYTES = 3 * 1024 * 1024 * 1024;
+const ARENA_FLOOR_BYTES = 16 * 1024 * 1024;
+
+function resolveArenaBytes(preferred: number): number {
+  return Math.max(ARENA_FLOOR_BYTES, Math.min(preferred, ARENA_CEILING_BYTES));
+}
+
 const WORKER_ORDER = [WorkerKind.Cpu, WorkerKind.Gpu, WorkerKind.Audio, WorkerKind.Io];
+
+/**
+ * Requests a worker triggers on itself.
+ *
+ * A worker's own `postMessage` goes to the *parent* (this shell), not back to
+ * itself, so a worker cannot use the message channel to invoke its own handler.
+ * The workers therefore call their handler functions directly instead of routing
+ * through postMessage. This list names those requests so the distinction is
+ * visible from this side too: they are the requests the host sends but never
+ * expects a `WorkerResponse` for, because the worker never answers one back.
+ *
+ * - `request-adapter` — the GPU worker's own capability probe, run at boot
+ * - `probe-folder` — the I/O worker's own folder scan, run at boot
+ */
+export const SELF_TRIGGERED_REQUESTS = ['request-adapter', 'probe-folder'] as const;
 
 /**
  * Worker entry URLs, one static import per worker.
@@ -257,7 +298,7 @@ export class WorkerHost {
       const reply = await this.request(kind, {
         type: 'boot',
         kind,
-        arenaBytes: ARENA_BYTES[kind],
+        arenaBytes: resolveArenaBytes(ARENA_BYTES[kind]),
         // Resolved to an absolute URL before it crosses the boundary. A relative
         // path inside a worker resolves against the *worker script's* URL
         // (assets/<name>-<hash>.js), not the document, so "./core.wasm" would be
@@ -278,13 +319,31 @@ export class WorkerHost {
       info.isSharedMemory = booted.isSharedMemory;
       info.regions = booted.regions;
 
+      // A shared buffer is not optional. A non-shared one means the worker's WASM
+      // memory is private to it, so no other worker can read guest RAM and the
+      // whole architecture is inoperable — worth an explicit warning even though
+      // the app may still appear to boot.
+      if (!booted.isSharedMemory) {
+        this.pushLog({
+          id: this.nextLogId++,
+          kind,
+          level: 'error',
+          message:
+            `${WORKER_LABEL[kind]}'s WASM memory is NOT shared. Guest RAM cannot be read by the ` +
+            `other workers, so no emulation is possible. This normally means the core was built ` +
+            `without -sSHARED_MEMORY.`,
+          at: performance.now(),
+        });
+      }
+
       this.pushLog({
         id: this.nextLogId++,
         kind,
         level: 'info',
         message:
           `${WORKER_LABEL[kind]} booted: ${booted.buildId} (ABI v${booted.abiVersion}), ` +
-          `arena ${booted.arenaBytes} bytes${booted.isSharedMemory ? ', shared' : ', NOT shared'}.`,
+          `arena ${booted.arenaBytes} bytes` +
+          ` (${booted.arenaUsedBytes} reserved)${booted.isSharedMemory ? ', shared' : ''}.`,
         at: performance.now(),
       });
     } catch (error) {
@@ -428,28 +487,30 @@ export class WorkerHost {
       case 'folder-summary':
       case 'keys-summary': {
         // These are replies: resolve the pending request with the matching seq.
-        // These are replies: resolve the pending request with the matching seq.
+        //
+        // A reply with no matching pending entry is a worker self-test or a late
+        // response to an already-timed-out request. Both are ignored silently:
+        // logging them would produce one line per stray ping, which is exactly the
+        // noise that makes people stop reading the log.
         const waiter = msg.seq !== undefined ? this.pending.get(kind)?.get(msg.seq) : undefined;
         if (waiter) {
           this.pending.get(kind)!.delete(msg.seq!);
           clearTimeout(waiter.timer);
           waiter.resolve(msg);
-        } else if (msg.type === 'pong') {
-          // Unsolicited pong: a worker-side self-test rather than our request.
-          this.pushLog({
-            id: this.nextLogId++,
-            kind,
-            level: 'info',
-            message: `worker self-test ping seq=${msg.seq} in ${msg.workerElapsedMs.toFixed(4)} ms`,
-            at: performance.now(),
-          });
         }
         return;
       }
 
-      case 'booted':
-        // Handled by bootOne, which awaits the boot request's reply.
+      case 'booted': {
+        // Resolves the boot request, then bootOne reads the fields off the reply.
+        const waiter = this.pending.get(kind)?.get(msg.seq);
+        if (waiter) {
+          this.pending.get(kind)!.delete(msg.seq);
+          clearTimeout(waiter.timer);
+          waiter.resolve(msg);
+        }
         return;
+      }
 
       case 'error': {
         const info = this.boots.get(kind)!;
@@ -492,15 +553,19 @@ export class WorkerHost {
         return;
 
       default: {
-        // An unknown message type is a protocol drift. Surfacing it beats
-        // silently dropping data the UI is waiting for.
+        // The union is exhaustive, so this branch only sees a value at runtime if
+        // a worker sent something not in WorkerResponse - i.e. real protocol
+        // drift. Surfacing it beats silently dropping data the UI may be waiting
+        // for. The cast is necessary because TS has narrowed `msg` to `never`.
+        const drifted = msg as { type?: unknown };
         this.pushLog({
           id: this.nextLogId++,
           kind,
           level: 'warn',
-          message: `Unrecognised message type '${String((msg as { type: string }).type)}' from ${WORKER_LABEL[kind]}.`,
+          message: `Unrecognised message type '${String(drifted?.type)}' from ${WORKER_LABEL[kind]}.`,
           at: performance.now(),
         });
+        return;
       }
     }
   }

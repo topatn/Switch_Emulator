@@ -21,7 +21,7 @@
 
 import { bootWorker, installCommonHandlers, reportError, log, type WorkerContext } from './common';
 import { WorkerKind } from '../platform/protocol';
-import type { WorkerRequest, ProbeFolderRequest, RestoreFolderRequest, PickKeysRequest } from '../platform/protocol';
+import type { ProbeFolderRequest, PickKeysRequest } from '../platform/protocol';
 
 const ctx: WorkerContext = { kind: WorkerKind.Io };
 
@@ -192,122 +192,123 @@ function summariseKeys(text: string): KeysSummary {
 
 // --- request handlers -----------------------------------------------------
 
-type HandlerMap = Partial<Record<WorkerRequest['type'], (msg: never) => Promise<void> | void>>;
+/**
+ * Probes the persisted folder handle and reports what it found.
+ *
+ * Defined as a standalone function rather than inline in the handler map, because
+ * boot calls it directly. A worker's `postMessage` delivers to the parent, not to
+ * itself, so routing a self-directed request through the message channel would
+ * send it to the shell as protocol noise.
+ */
+async function probeFolder(raw: ProbeFolderRequest): Promise<void> {
+  const handle = await idbGet<FileSystemDirectoryHandle>('userFolder');
+  if (!handle) {
+    log(WorkerKind.Io, 'info', 'No user folder has been granted yet.');
+    return;
+  }
+
+  // A persisted handle can lose permission after a reload; queryPermission is the
+  // documented check and reports a state rather than throwing.
+  const permission = await queryPermission(handle);
+  const summary = await summariseDirectory(handle);
+
+  post({
+    type: 'folder-summary',
+    seq: raw.seq,
+    name: handle.name,
+    permission,
+    entries: summary.entries,
+    present: summary.present,
+    missing: summary.missing,
+  });
+  log(
+    WorkerKind.Io,
+    'info',
+    `User folder "${summary.name}" restored (permission: ${permission}). ` +
+      `Top-level entries: ${summary.entries.map((e) => e.name).join(', ') || '(empty)'}.`,
+  );
+}
+
+async function restoreFolder(): Promise<void> {
+  const handle = await idbGet<FileSystemDirectoryHandle>('userFolder');
+  if (!handle) return;
+  const state = await queryPermission(handle);
+  if (state === 'granted') {
+    log(WorkerKind.Io, 'info', `Access to "${handle.name}" is still granted.`);
+  } else {
+    log(
+      WorkerKind.Io,
+      'warn',
+      `Access to "${handle.name}" needs to be re-granted. The picker will re-request it on demand.`,
+    );
+  }
+}
+
+async function pickKeys(raw: PickKeysRequest): Promise<void> {
+  if (typeof showOpenFilePicker !== 'function') {
+    log(
+      WorkerKind.Io,
+      'error',
+      'showOpenFilePicker is unavailable in this browser. Provide keys by placing prod.keys at ' +
+        '<user folder>/keys/prod.keys.',
+    );
+    return;
+  }
+
+  let picked: FileSystemFileHandle | null = null;
+  try {
+    const picker = showOpenFilePicker;
+    const [handle] = await picker({
+      multiple: false,
+      excludeAcceptAllOption: false,
+      types: [{ description: 'Switch keys file', accept: { 'text/plain': ['.keys'] } }],
+    });
+    picked = handle ?? null;
+  } catch (error) {
+    // AbortError is the user changing their mind, which is not an error.
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      log(WorkerKind.Io, 'info', 'Key selection cancelled.');
+      return;
+    }
+    throw error;
+  }
+
+  if (!picked) return;
+
+  const file = await picked.getFile();
+  const text = await file.text();
+  const summary = summariseKeys(text);
+
+  // The File and its text go out of scope here. We keep neither the handle nor
+  // the contents: re-reading the file on demand is the intended flow, and holding
+  // key material in a worker global is exactly what Part 0 rules out. Only counts
+  // and key *names* cross the boundary.
+  post({
+    type: 'keys-summary',
+    seq: raw.seq,
+    fileName: file.name,
+    byteLength: file.size,
+    valid: summary.valid,
+    keyLineCount: summary.keyLineCount,
+    rightsIdCount: summary.rightsIdCount,
+    families: summary.families,
+    problems: summary.problems,
+  });
+  log(
+    WorkerKind.Io,
+    summary.valid ? 'info' : 'error',
+    `Keys file "${file.name}" (${file.size} bytes): ${summary.keyLineCount} key entries, ` +
+      `${summary.rightsIdCount} rights_ids, families [${summary.families.join(', ')}]. ` +
+      `Valid: ${summary.valid}. Key material was not retained or logged.` +
+      (summary.problems.length ? ` Issues: ${summary.problems.join(' ')}` : ''),
+  );
+}
 
 installCommonHandlers(ctx, {
-  'probe-folder': async (raw: ProbeFolderRequest) => {
-    const handle = await idbGet<FileSystemDirectoryHandle>('userFolder');
-    if (!handle) {
-      post({ type: 'log', kind: WorkerKind.Io, level: 'info', message: 'No user folder has been granted yet.' });
-      return;
-    }
-    // A persisted handle can lose permission after a reload; query() is the
-    // documented check and reports a state rather than throwing.
-    const permission = await queryPermission(handle);
-    const summary = await summariseDirectory(handle);
-    post({
-      type: 'folder-summary',
-      seq: raw.seq,
-      name: handle.name,
-      permission,
-      entries: summary.entries,
-      present: summary.present,
-      missing: summary.missing,
-    });
-    post({
-      type: 'log',
-      kind: WorkerKind.Io,
-      level: 'info',
-      message:
-        `User folder "${summary.name}" restored (permission: ${permission}). ` +
-        `Top-level entries: ${summary.entries.map((e) => e.name).join(', ') || '(empty)'}.`,
-    });
-  },
-
-  'restore-folder': async (raw: RestoreFolderRequest) => {
-    void raw;
-    const handle = await idbGet<FileSystemDirectoryHandle>('userFolder');
-    if (!handle) return;
-    const state = await queryPermission(handle);
-    if (state === 'granted') {
-      log(WorkerKind.Io, 'info', `Access to "${handle.name}" is still granted.`);
-    } else {
-      log(
-        WorkerKind.Io,
-        'warn',
-        `Access to "${handle.name}" needs to be re-granted. The picker will re-request it on demand.`,
-      );
-    }
-  },
-
-  'pick-keys': async (raw: PickKeysRequest) => {
-    if (typeof showOpenFilePicker !== 'function') {
-      post({
-        type: 'log',
-        kind: WorkerKind.Io,
-        level: 'error',
-        message:
-          'showOpenFilePicker is unavailable in this browser. Provide keys by placing prod.keys at <user folder>/keys/prod.keys.',
-      });
-      return;
-    }
-
-    let picked: FileSystemFileHandle | null = null;
-    try {
-      const picker = showOpenFilePicker;
-      const [handle] = await picker({
-        multiple: false,
-        excludeAcceptAllOption: false,
-        types: [
-          {
-            description: 'Switch keys file',
-            accept: { 'text/plain': ['.keys'] },
-          },
-        ],
-      });
-      picked = handle ?? null;
-    } catch (error) {
-      // AbortError is the user changing their mind, which is not an error.
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        post({ type: 'log', kind: WorkerKind.Io, level: 'info', message: 'Key selection cancelled.' });
-        return;
-      }
-      throw error;
-    }
-
-    if (!picked) return;
-
-    const file = await picked.getFile();
-    const text = await file.text();
-    const summary = summariseKeys(text);
-
-    // The File object and its text go out of scope here. We keep neither the
-    // handle nor the contents: re-reading the file on demand is the intended
-    // flow, and holding key material in a worker global is exactly what Part 0
-    // rules out. Only counts and key *names* cross the boundary.
-    post({
-      type: 'keys-summary',
-      seq: raw.seq,
-      fileName: file.name,
-      byteLength: file.size,
-      valid: summary.valid,
-      keyLineCount: summary.keyLineCount,
-      rightsIdCount: summary.rightsIdCount,
-      families: summary.families,
-      problems: summary.problems,
-    });
-    post({
-      type: 'log',
-      kind: WorkerKind.Io,
-      level: summary.valid ? 'info' : 'error',
-      message:
-        `Keys file "${file.name}" (${file.size} bytes): ${summary.keyLineCount} key entries, ` +
-        `${summary.rightsIdCount} rights_ids, families [${summary.families.join(', ')}]. ` +
-        `Valid: ${summary.valid}. Key material was not retained or logged.` +
-        (summary.problems.length ? ` Issues: ${summary.problems.join(' ')}` : ''),
-    });
-  },
-} satisfies HandlerMap);
+  'probe-folder': async (raw: ProbeFolderRequest) => probeFolder(raw),
+  'restore-folder': async () => restoreFolder(),
+  'pick-keys': async (raw: PickKeysRequest) => pickKeys(raw),
+});
 
 function post(msg: unknown): void {
   (self as unknown as Worker).postMessage(msg);
@@ -318,10 +319,11 @@ self.addEventListener('message', async (event) => {
   if (msg?.type !== 'boot') return;
 
   try {
-    await bootWorker(WorkerKind.Io, msg);
+    await bootWorker(ctx, msg);
     // Probing on boot turns "did my folder survive the reload?" into a line in
-    // the diagnostics log instead of a support question.
-    post({ type: 'probe-folder', seq: 0 } satisfies ProbeFolderRequest);
+    // the diagnostics log instead of a support question. Called directly: a
+    // worker's postMessage goes to the parent, not to itself.
+    await probeFolder({ type: 'probe-folder', seq: 0 });
   } catch (error) {
     reportError(WorkerKind.Io, error);
   }
